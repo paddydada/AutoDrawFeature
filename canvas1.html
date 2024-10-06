@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autodraw HTML5 Integration Example</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            height: 100vh;
+            background-color: #f0f0f0;
+        }
+
+        #sidebar {
+            width: 60px;
+            background-color: #fff;
+            padding: 10px;
+            box-shadow: 2px 0 5px rgba(0, 0, 0, 0.2);
+            position: relative;
+        }
+
+        .btn-circle {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 10px auto;
+            padding: 0;
+            transition: background-color 0.3s;
+        }
+
+        .btn-circle:hover {
+            background-color: #e7e7e7; /* Change hover color */
+        }
+
+        #main {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            position: relative;
+        }
+
+        #header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            background-color: #fff;
+            padding: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #can {
+            border: 1px solid black;
+            flex-grow: 1;
+            background-color: white;
+            cursor: crosshair;
+        }
+
+        #suggestions {
+            width: 100%;
+            border: 1px solid black;
+            overflow-x: auto;
+            display: flex;
+            margin-top: 10px;
+            padding: 5px;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        #suggestions img {
+            cursor: pointer;
+            margin: 2px;
+            height: 50px;
+            width: auto;
+        }
+
+        @media (max-width: 600px) {
+            #sidebar {
+                width: 100%;
+                position: static;
+            }
+
+            #main {
+                padding: 0;
+            }
+
+            #header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="sidebar">
+        <button class="btn btn-primary btn-circle" onclick="setDrawingMode('normal')">
+            <i class="fas fa-pencil-alt"></i>
+        </button>
+        <button class="btn btn-primary btn-circle" onclick="setDrawingMode('auto')">
+            <i class="fas fa-magic"></i>
+        </button>
+        <button class="btn btn-primary btn-circle" onclick="erase()">
+            <i class="fas fa-eraser"></i>
+        </button>
+        <button class="btn btn-primary btn-circle" onclick="undo()">
+            <i class="fas fa-undo"></i>
+        </button>
+        <button class="btn btn-primary btn-circle" onclick="redo()">
+            <i class="fas fa-redo"></i>
+        </button>
+        <input type="color" id="colorPicker" onchange="changeColor(event)" style="margin: 10px auto; width: 50px;">
+        <input type="number" id="eraserSize" value="10" onchange="changeEraserSize(event)" style="margin: 10px auto; width: 50px;">
+        <button class="btn btn-primary btn-circle" onclick="fillColor()">
+            <i class="fas fa-fill-drip"></i>
+        </button>
+    </div>
+
+    <div id="main">
+        <div id="header">
+            <div id="suggestions"></div>
+        </div>
+
+        <canvas id="can"></canvas>
+    </div>
+
+    <!-- Bootstrap JS and FontAwesome for icons -->
+    <script src="https://code.jquery.com/jquery-1.12.4.min.js" integrity="sha256-ZosEbRLbNQzLpnKIkEdrPv7lOy9C27hHQ+Xp8a4MxAQ=" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/js/all.min.js"></script>
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/js/bootstrap.min.js"></script>
+
+    <script type="text/javascript">
+        var API_ENDPOINT = 'https://inputtools.google.com/request?ime=handwriting&app=autodraw&dbg=1&cs=1&oe=UTF-8';
+        var SVG_ENDPOINT = 'https://storage.googleapis.com/artlab-public.appspot.com/stencils/selman/';
+
+        var canvas, ctx, pressed = false,
+            shapes = [], undoStack = [], redoStack = [], currentShape = null,
+            prevX = 0, currX = 0, prevY = 0, currY = 0;
+
+        var dColor = "black", dStroke = 8, eraserSize = 10;
+        var drawingMode = 'normal';
+        var selectedIcon = null;
+
+        function init() {
+            canvas = document.getElementById("can");
+            ctx = canvas.getContext("2d");
+
+            // Resize canvas to fit the window
+            window.addEventListener('resize', resizeCanvas, false);
+            resizeCanvas();
+
+            // Setup mouse events
+            canvas.addEventListener("mousedown", onMouseDown, false);
+            canvas.addEventListener("mouseup", onMouseUp, false);
+            canvas.addEventListener("mousemove", onMouseMove, false);
+            canvas.addEventListener("mouseout", onMouseOut, false);
+        }
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth - 220; // Adjust for sidebar width
+            canvas.height = window.innerHeight - 100; // Adjust for header height
+            redrawShapes();
+        }
+
+        function redrawShapes() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (var shape of shapes) {
+                if (shape[4]) {
+                    ctx.drawImage(shape[4], shape[5], shape[6], shape[4].width, shape[4].height);
+                } else {
+                    ctx.beginPath();
+                    ctx.moveTo(shape[0][0], shape[1][0]);
+                    for (var i = 1; i < shape[0].length; i++) {
+                        ctx.lineTo(shape[0][i], shape[1][i]);
+                    }
+                    ctx.strokeStyle = shape[2] || dColor;
+                    ctx.lineCap = "round";
+                    ctx.lineJoin = "round";
+                    ctx.lineWidth = shape[3] || dStroke;
+                    ctx.stroke();
+                    ctx.closePath();
+                }
+            }
+        }
+
+        function prepareNewShape() {
+            currentShape = [
+                [],
+                [],
+                dColor,
+                dStroke
+            ];
+        }
+
+        function addPointToCurrentShape(x, y) {
+            currentShape[0].push(x);
+            currentShape[1].push(y);
+        }
+
+        function erase() {
+            shapes = [];
+            undoStack = [];
+            redoStack = [];
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            $('#suggestions').html('');
+        }
+
+        function commitCurrentShape() {
+            if (currentShape && currentShape[0].length) {
+                shapes.push(currentShape);
+                undoStack.push(currentShape); // Add current shape to undo stack
+                redrawShapes();
+                if (drawingMode === 'auto') {
+                    sendToAutoDraw();
+                }
+                prepareNewShape();
+            }
+        }
+
+        function undo() {
+            if (shapes.length > 0) {
+                var shape = shapes.pop();
+                redoStack.push(shape);
+                redrawShapes();
+            }
+        }
+
+        function redo() {
+            if (redoStack.length > 0) {
+                var shape = redoStack.pop();
+                shapes.push(shape);
+                redrawShapes();
+            }
+        }
+
+        function onMouseDown(e) {
+            pressed = true;
+            prevX = currX;
+            prevY = currY;
+            currX = e.clientX - document.getElementById("sidebar").offsetWidth; // Adjust for sidebar
+            currY = e.clientY - document.getElementById("header").offsetHeight; // Adjust for header
+            prepareNewShape();
+            addPointToCurrentShape(currX, currY);
+        }
+
+        function onMouseUp(e) {
+            pressed = false;
+            commitCurrentShape();
+        }
+
+        function onMouseMove(e) {
+            if (pressed) {
+                prevX = currX;
+                prevY = currY;
+                currX = e.clientX - document.getElementById("sidebar").offsetWidth; // Adjust for sidebar
+                currY = e.clientY - document.getElementById("header").offsetHeight; // Adjust for header
+                addPointToCurrentShape(currX, currY);
+                redrawShapes();
+            }
+        }
+
+        function onMouseOut() {
+            pressed = false;
+            commitCurrentShape();
+        }
+
+        function setDrawingMode(mode) {
+            drawingMode = mode;
+            if (mode === 'auto') {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                undoStack = []; // Clear undo stack for auto mode
+                shapes = []; // Clear shapes in auto mode
+                $('#suggestions').html('');
+            }
+        }
+
+
+
+
+  function sendToAutoDraw() {
+            jQuery.ajax({
+                url: API_ENDPOINT,
+                type: 'POST',
+                contentType: 'application/json; charset=utf-8',
+                dataType: 'json',
+                data: JSON.stringify({
+                    input_type: 0,
+                    requests: [{
+                        language: 'autodraw',
+                        writing_guide: {
+                            "width": 400,
+                            "height": 400
+                        },
+                        ink: shapes
+                    }]
+                }),
+                success: function(data) {
+                    if (data[0] !== 'SUCCESS') {
+                        throw new Error(data);
+                    }
+                    var results = extractDataFromApi(data);
+                    displaySuggestions(results);
+                },
+                error: function(response) {
+                    console.log("Error in AutoDraw API: ", response); // Log error response
+                }
+            });
+        }
+
+        function sendToAutoDraw() {
+            jQuery.ajax({
+                url: API_ENDPOINT,
+                type: 'POST',
+                contentType: 'application/json; charset=utf-8',
+                dataType: 'json',
+                data: JSON.stringify({
+                    input_type: 0,
+                    requests: [{
+                        language: 'autodraw',
+                        writing_guide: {
+                            "width": 600,
+                            "height": 500
+                        },
+                        ink: shapes
+                    }]
+                }),
+                success: function(data) {
+                    if (data[0] !== 'SUCCESS') {
+                        throw new Error(data);
+                    }
+                    var results = extractDataFromApi(data);
+                    displaySuggestions(results);
+                },
+                error: function(response) {
+                    console.log("Error in AutoDraw API: ", response); // Log error response
+                }
+            });
+        }
+
+        function extractDataFromApi(data) {
+            var regex = /SCORESINKS: (.*) Service_Recognize:/;
+            return JSON.parse(data[1][0][3].debug_info.match(regex)[1]);
+        }
+
+        function displaySuggestions(suggestions) {
+            var $suggestions = jQuery('#suggestions');
+            $suggestions.html('');
+
+            for (var i = 0; i < suggestions.length; i++) {
+                var suggestion = suggestions[i];
+                var escapedName = suggestion[0].replace(/ /g, '-');
+                var imgSrc = SVG_ENDPOINT + escapedName + '-01.svg';
+
+                console.log("Loading image: ", imgSrc); // Log image source for debugging
+
+                var $img = jQuery('<img />')
+                .attr('src', imgSrc)
+                .attr('width', 150)
+                .attr('height', 150)
+                .css({ border: '1px solid black' })
+                .on('error', function() {
+                        console.error("Failed to load image: ", this.src); // Log failed image source
+                        $(this).remove();
+                    });
+
+                $img.on('click', function() {
+                    pickSuggestion($(this).attr('src'));
+                });
+
+                var $imgWrapper = jQuery('<div />').attr('style', 'width:80px;height:80px;');
+                $imgWrapper.append($img);
+                $suggestions.append($imgWrapper);
+            }
+        }
+
+        function pickSuggestion(src) {
+            var img = new Image();
+            img.src = src;
+
+            img.onload = function() {
+                if (shapes.length > 0) {
+                    const lastShape = shapes.pop(); // Remove the last shape (rough drawing)
+                    const imgX = lastShape[0][0]; // Original position X
+                    const imgY = lastShape[1][0]; // Original position Y
+                    shapes.push([[], [], dColor, dStroke, img, imgX, imgY]); // Add new image to shapes
+                    redrawShapes(); // Redraw shapes including the new image
+
+                    selectedIcon = img;
+                }
+            };
+
+            img.onerror = function() {
+                console.error("Failed to load icon: ", src); // Log failed icon loading
+            };
+        }
+
+        window.onload = init;
+    </script>
+</body>
+
+</html>
+
